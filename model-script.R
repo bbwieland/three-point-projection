@@ -3,6 +3,10 @@
 library(tidyverse)
 library(nbastatR)
 library(rvest)
+library(bigballR)
+library(hoopR)
+
+setwd("~/Desktop/SQ Projects/three-point-projection")
 
 ## scraping and calculating the NBA data ----
 
@@ -22,43 +26,17 @@ rm(df_dict_nba_players)
 
 ## scraping and calculating college data ----
 
-bbref.draft.scraper <- function(pageurl,yr){
-  site <- read_html(pageurl)
-  table <- site %>% html_elements(".sortable") %>% html_table()
-  table <- data.frame(table)
-  colnames(table) = unlist(table[1,]) 
-  names(table)[8:11] = c("TOTMP","TOTPTS","TOTTRB","TOTAST")
-  table <- table %>% mutate(DraftYr = yr) %>%
-    mutate(Rk = as.numeric(Rk),Pk = as.numeric(Pk), Yrs = as.numeric(Yrs),
-           G = as.numeric(G),TOTMP = as.numeric(TOTMP), TOTPTS = as.numeric(TOTPTS),
-           TOTTRB = as.numeric(TOTTRB), TOTAST = as.numeric(TOTAST), `FG%` = as.numeric(`FG%`),
-           `3P%` = as.numeric(`3P%`),`FT%` = as.numeric(`FT%`),
-           MPG = as.numeric(MP), PPG = as.numeric(PTS), RPG = as.numeric(TRB),
-           APG = as.numeric(AST), WS = as.numeric(WS), `WS/48` = as.numeric(`WS/48`),
-           BPM = as.numeric(BPM), VORP = as.numeric(VORP)) %>%
-    mutate(Tm = gsub("CHH","CHA",Tm)) %>%
-    mutate(Tm = gsub("CHO","CHA",Tm)) %>%
-    mutate(Tm = gsub("NOH","NOP",Tm)) %>%
-    mutate(Tm = gsub("NJN","BRK",Tm)) %>%
-    mutate(Tm = gsub("SEA","OKC",Tm)) %>%
-    mutate(Tm = gsub("VAN","MEM",Tm)) %>%
-    mutate(Tm = gsub("NOK","CHA",Tm)) %>%
-    mutate(Tm = gsub("WSB","WAS",Tm)) %>%
-    mutate(NAtest = is.na(Pk))
-  
-  table <- table %>% filter(NAtest == FALSE) %>% select(-PTS,-TRB,-MP,-AST,-NAtest)
-  table
-  }
+ncaa_2020 <- read_csv("ncaa-2020.csv")
+ncaa_2021 <- read_csv("ncaa-2021.csv")
 
-draft.2021 <- bbref.draft.scraper("https://www.basketball-reference.com/draft/NBA_2021.html",2021)
-draft.2020 <- bbref.draft.scraper("https://www.basketball-reference.com/draft/NBA_2020.html",2020)
-draft_data <- rbind(draft.2021,draft.2020)
+ncaa_data <- rbind(ncaa_2021,ncaa_2020)
+ncaa_data <- ncaa_data[!duplicated(ncaa_data$NAME),]
 
-rm(draft.2021)
-rm(draft.2020)
+rm(ncaa_2020)
+rm(ncaa_2021)
 
-## combining data ----
+## merging NBA and NCAA data ---
 
-full_data <- left_join(draft_data,nba_data) %>% filter(is.na(fg3m) == F)
-
+total_data <- left_join(ncaa_data,nba_data, by = c("NAME" = "Player")) %>%
+  filter(is.na(fg3m) == F)
 
