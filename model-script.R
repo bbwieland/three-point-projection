@@ -3,8 +3,9 @@
 library(tidyverse)
 library(nbastatR)
 library(rvest)
-library(bigballR)
-library(hoopR)
+library(gt)
+library(espnscrapeR)
+library(RColorBrewer)
 
 setwd("~/Desktop/SQ Projects/three-point-projection")
 
@@ -26,8 +27,8 @@ rm(df_dict_nba_players)
 
 ## scraping and calculating college data ----
 
-ncaa_2020 <- read_csv("ncaa-2020.csv")
-ncaa_2021 <- read_csv("ncaa-2021.csv")
+ncaa_2020 <- read_csv("ncaa-2020.csv") %>% mutate(Year = 2020)
+ncaa_2021 <- read_csv("ncaa-2021.csv") %>% mutate(Year = 2021)
 
 ncaa_data <- rbind(ncaa_2021,ncaa_2020)
 ncaa_data <- ncaa_data[!duplicated(ncaa_data$NAME),]
@@ -38,5 +39,77 @@ rm(ncaa_2021)
 ## merging NBA and NCAA data ---
 
 total_data <- left_join(ncaa_data,nba_data, by = c("NAME" = "Player")) %>%
-  filter(is.na(fg3m) == F)
+  filter(is.na(fg3m) == F) %>%
+  mutate(sq_name = gsub(" ","%20",NAME),
+         sq_school = gsub(" ","%20",SCHOOL)) %>%
+  mutate(sq_url = paste0("https://shotquality.com/individual-player/college_mens/",Year,
+                         "/",sq_school,
+                         "/",sq_name)) %>%
+  select(-sq_name,-sq_school)
 
+## importing ShotQuality data ----
+
+sq_data <- read_csv("sq-data.csv") %>% select(NAME,`sq-3pt-catch`,`sq-3pt-dribble`) %>%
+  rename(sq_3pt_catch = `sq-3pt-catch`,sq_3pt_dribble = `sq-3pt-dribble`)
+
+## merging ShotQuality data to NBA and NCAA data ----
+
+total_data <- total_data %>% inner_join(sq_data)
+
+## building regression models ----
+
+regression_data <- total_data %>%
+  select(fg3pct,pctFT,pct3P,sq_3pt_catch,sq_3pt_dribble)
+
+model <- lm(fg3pct~.,regression_data)
+
+model.sq <- lm(fg3pct~sq_3pt_catch+sq_3pt_dribble,regression_data)
+
+model.sq.catch <- lm(fg3pct~sq_3pt_catch,regression_data)
+
+model.ncaa.3p <- lm(fg3pct~pct3P,regression_data)
+
+model.ncaa.ft <- lm(fg3pct~pctFT,regression_data)
+
+model.blended <- lm(fg3pct~sq_3pt_catch+pct3P,regression_data)
+
+## using regression models for prediction
+## creating a final dataset
+
+prediction_data <- total_data %>% 
+  select(-RK,-PICK,-YR,-sq_url,-fg3per36,-Year)
+
+prediction_data <- prediction_data %>%
+  mutate(all_predictors = round(predict(model,prediction_data),3),
+         sq_catch_only = round(predict(model.sq.catch,prediction_data),3),
+         ncaa_3p_only = round(predict(model.ncaa.3p,prediction_data),3),
+         fg3pct = round(fg3pct,3)) %>%
+  rename(Name = NAME, School = SCHOOL, Conference = CONF,
+         NCAA_FT_pct = pctFT,NCAA_3P_per_100 = per1003p,
+         NCAA_3P_pct = pct3P, NBA_3PM = fg3m, NBA_3PA = fg3a,
+         NBA_3P_pct = fg3pct,SQ_3P_catch_PPP = sq_3pt_catch,
+         SQ_3P_dribble_PPP = sq_3pt_dribble) %>%
+  mutate(SQ_3P_catch_pct = round(SQ_3P_catch_PPP/3,3),SQ_3P_dribble_pct = round(SQ_3P_dribble_PPP/3,3)) %>%
+  select(Name,School,Conference,NCAA_FT_pct,NCAA_3P_pct,
+         SQ_3P_catch_pct,SQ_3P_dribble_pct,all_predictors,sq_catch_only,
+         ncaa_3p_only,NBA_3P_pct)
+
+
+table <- gt(prediction_data) %>% espnscrapeR::gt_theme_538() %>%
+  tab_header(title = md("**Testing NBA Three-Point Percentage Prediction Models**")) %>%
+  data_color(columns = c(all_predictors,sq_catch_only,ncaa_3p_only,NBA_3P_pct),
+             colors = brewer.pal(7,"RdYlGn")) %>%
+  cols_width(Name ~ px(250),
+             School ~ px(200)) %>%
+  cols_label(NCAA_FT_pct = "NCAA FT%",
+             NCAA_3P_pct = "NCAA 3P%",
+             SQ_3P_catch_pct = "SQ Catch 3P%",
+             SQ_3P_dribble_pct = "SQ Dribble 3P%",
+             all_predictors = "Prediction using all variables",
+             sq_catch_only = "Prediction using SQ Catch 3P%",
+             ncaa_3p_only = "Prediction using NCAA 3P%",
+             NBA_3P_pct = "NBA 3P%",
+             Conference = "Conf.")
+
+gtsave(table,"export-table.png")
+gtsave(table,"export-table.html")
