@@ -6,6 +6,7 @@ library(rvest)
 library(gt)
 library(espnscrapeR)
 library(RColorBrewer)
+library(reactable)
 
 setwd("~/Desktop/SQ Projects/three-point-projection")
 
@@ -59,29 +60,79 @@ total_data <- total_data %>% inner_join(sq_data)
 ## building regression models ----
 
 regression_data <- total_data %>%
-  select(fg3pct,pctFT,pct3P,sq_3pt_catch,sq_3pt_dribble)
+  select(fg3pct,pctFT,pct3P,sq_3pt_catch,sq_3pt_dribble)  %>% filter(is.na(sq_3pt_dribble) == F)
 
-model <- lm(fg3pct~.,regression_data)
+regression_data_dribble <- regression_data %>% filter(is.na(sq_3pt_dribble) == F)
 
-model.sq <- lm(fg3pct~sq_3pt_catch+sq_3pt_dribble,regression_data)
+model <- lm(fg3pct~.,regression_data_dribble)
 
 model.sq.catch <- lm(fg3pct~sq_3pt_catch,regression_data)
 
-model.ncaa.3p <- lm(fg3pct~pct3P,regression_data)
-
+model.sq.dribble <- lm(fg3pct~sq_3pt_dribble,regression_data_dribble)
+  
 model.ncaa.ft <- lm(fg3pct~pctFT,regression_data)
 
-model.blended <- lm(fg3pct~sq_3pt_catch+pct3P,regression_data)
+model.ncaa.3p <- lm(fg3pct~pct3P,regression_data)
+
+model.sqdata <- lm(fg3pct~sq_3pt_catch+sq_3pt_dribble,regression_data_dribble)
+
+model.ncaadata <- lm(fg3pct~pct3P+pctFT,regression_data)
+
+rsquared <- function(model) {
+  r <- round(summary(model)$r.squared,3)
+  r
+}
+
+adjrsquared <- function(model) {
+  adjr <- round(summary(model)$adj.r.squared,3)
+  adjr
+}
+
+mse2 <- function(model){
+  mse2 = round(sqrt(mean(model$residuals^2)),4)
+  mse2
+}
+model.summariser <- function(name,model){
+  name = name
+  r = rsquared(model)
+  adjr = adjrsquared(model)
+  rmse = mse2(model)
+  output <- data.frame(Model = name,RSquared = r, AdjRSquared = adjr,RootMeanSqError = rmse)
+  output
+}
+
+ncaaf.r <- model.summariser("NCAA FT%",model.ncaa.ft)
+ncaat.r <- model.summariser("NCAA 3P%",model.ncaa.3p)
+ncaa.r <- model.summariser("NCAA FT% & 3P%",model.ncaadata)
+
+full.r <- model.summariser("All Variables",model)
+
+sq.r <- model.summariser("SQ Catch & Dribble",model.sqdata)
+sqc.r <- model.summariser("SQ Catch",model.sq.catch)
+sqd.r <- model.summariser("SQ Dribble",model.sq.dribble)
+
+r.table <- rbind(ncaaf.r,ncaat.r,ncaa.r,sq.r,sqc.r,sqd.r,full.r) %>%
+  arrange(-AdjRSquared) %>% 
+  select(-RSquared)
+
+r.export.table <- gt(r.table) %>%
+  cols_label(AdjRSquared = "Adj. R-Squared",RootMeanSqError = "Root MSE") %>%
+  espnscrapeR::gt_theme_538() %>%
+  data_color(columns = c(AdjRSquared),
+             colors = brewer.pal(9,"RdYlGn")) %>%
+  data_color(columns = c(RootMeanSqError),
+             colors = rev(brewer.pal(9,"RdYlGn")))
 
 ## using regression models for prediction
 ## creating a final dataset
 
 prediction_data <- total_data %>% 
-  select(-RK,-PICK,-YR,-sq_url,-fg3per36,-Year)
+  select(-RK,-PICK,-YR,-sq_url,-fg3per36,-Year) %>% 
+  filter(is.na(sq_3pt_dribble) == F)
 
 prediction_data <- prediction_data %>%
   mutate(all_predictors = round(predict(model,prediction_data),3),
-         sq_catch_only = round(predict(model.sq.catch,prediction_data),3),
+         sq_composite = round(predict(model.sqdata,prediction_data),3),
          ncaa_3p_only = round(predict(model.ncaa.3p,prediction_data),3),
          fg3pct = round(fg3pct,3)) %>%
   rename(Name = NAME, School = SCHOOL, Conference = CONF,
@@ -91,14 +142,16 @@ prediction_data <- prediction_data %>%
          SQ_3P_dribble_PPP = sq_3pt_dribble) %>%
   mutate(SQ_3P_catch_pct = round(SQ_3P_catch_PPP/3,3),SQ_3P_dribble_pct = round(SQ_3P_dribble_PPP/3,3)) %>%
   select(Name,School,Conference,NCAA_FT_pct,NCAA_3P_pct,
-         SQ_3P_catch_pct,SQ_3P_dribble_pct,all_predictors,sq_catch_only,
+         SQ_3P_catch_pct,SQ_3P_dribble_pct,all_predictors,sq_composite,
          ncaa_3p_only,NBA_3P_pct)
 
 
-table <- gt(prediction_data) %>% espnscrapeR::gt_theme_538() %>%
+table <- prediction_data %>%
+  arrange(-NBA_3P_pct) %>%
+  gt() %>% espnscrapeR::gt_theme_538() %>%
   tab_header(title = md("**Testing NBA Three-Point Percentage Prediction Models**")) %>%
-  data_color(columns = c(all_predictors,sq_catch_only,ncaa_3p_only,NBA_3P_pct),
-             colors = brewer.pal(7,"RdYlGn")) %>%
+  data_color(columns = c(all_predictors,sq_composite,ncaa_3p_only,NBA_3P_pct),
+             colors = brewer.pal(9,"RdYlGn")) %>%
   cols_width(Name ~ px(250),
              School ~ px(200)) %>%
   cols_label(NCAA_FT_pct = "NCAA FT%",
@@ -106,10 +159,20 @@ table <- gt(prediction_data) %>% espnscrapeR::gt_theme_538() %>%
              SQ_3P_catch_pct = "SQ Catch 3P%",
              SQ_3P_dribble_pct = "SQ Dribble 3P%",
              all_predictors = "Prediction using all variables",
-             sq_catch_only = "Prediction using SQ Catch 3P%",
+             sq_composite = "Prediction using SQ Data Only",
              ncaa_3p_only = "Prediction using NCAA 3P%",
              NBA_3P_pct = "NBA 3P%",
-             Conference = "Conf.")
+             Conference = "Conf.") %>%
+  fmt_percent(columns = c(NCAA_FT_pct,NCAA_3P_pct,SQ_3P_catch_pct,SQ_3P_dribble_pct,
+                          all_predictors,sq_composite,ncaa_3p_only,NBA_3P_pct),
+              decimals = 1) %>%
+  tab_source_note("NBA data source: Basketball-Reference") %>%
+  tab_source_note("NCAA data source: BartTorvik") %>%
+  tab_source_note("ShotQuality data source: ShotQuality.com")
+
+
+table
 
 gtsave(table,"export-table.png")
 gtsave(table,"export-table.html")
+gtsave(r.export.table,"model-comparison.html")
