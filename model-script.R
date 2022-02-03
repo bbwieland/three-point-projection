@@ -62,19 +62,19 @@ total_data <- total_data %>% inner_join(sq_data)
 regression_data <- total_data %>%
   select(fg3pct,pctFT,pct3P,sq_3pt_catch,sq_3pt_dribble)  %>% filter(is.na(sq_3pt_dribble) == F)
 
-regression_data_dribble <- regression_data %>% filter(is.na(sq_3pt_dribble) == F)
+regression_data <- regression_data %>% filter(is.na(sq_3pt_dribble) == F)
 
-model <- lm(fg3pct~.,regression_data_dribble)
+model <- lm(fg3pct~.,regression_data)
 
 model.sq.catch <- lm(fg3pct~sq_3pt_catch,regression_data)
 
-model.sq.dribble <- lm(fg3pct~sq_3pt_dribble,regression_data_dribble)
+model.sq.dribble <- lm(fg3pct~sq_3pt_dribble,regression_data)
   
 model.ncaa.ft <- lm(fg3pct~pctFT,regression_data)
 
 model.ncaa.3p <- lm(fg3pct~pct3P,regression_data)
 
-model.sqdata <- lm(fg3pct~sq_3pt_catch+sq_3pt_dribble,regression_data_dribble)
+model.sqdata <- lm(fg3pct~sq_3pt_catch+sq_3pt_dribble,regression_data)
 
 model.ncaadata <- lm(fg3pct~pct3P+pctFT,regression_data)
 
@@ -121,7 +121,19 @@ r.export.table <- gt(r.table) %>%
   data_color(columns = c(AdjRSquared),
              colors = brewer.pal(9,"RdYlGn")) %>%
   data_color(columns = c(RootMeanSqError),
-             colors = rev(brewer.pal(9,"RdYlGn")))
+             colors = rev(brewer.pal(9,"RdYlGn"))) %>%
+  tab_source_note("NBA data source: Basketball-Reference") %>%
+  tab_source_note("NCAA data source: BartTorvik") %>%
+  tab_source_note("ShotQuality data source: ShotQuality.com")%>%
+  tab_header(title = md("**Comparing NBA Three-Point Prediction Models**"))
+
+rm(ncaa.r)
+rm(ncaaf.r)
+rm(ncaat.r)
+rm(sq.r)
+rm(sqc.r)
+rm(sqd.r)
+rm(full.r)
 
 ## using regression models for prediction
 ## creating a final dataset
@@ -143,17 +155,17 @@ prediction_data <- prediction_data %>%
   mutate(SQ_3P_catch_pct = round(SQ_3P_catch_PPP/3,3),SQ_3P_dribble_pct = round(SQ_3P_dribble_PPP/3,3)) %>%
   select(Name,School,Conference,NCAA_FT_pct,NCAA_3P_pct,
          SQ_3P_catch_pct,SQ_3P_dribble_pct,all_predictors,sq_composite,
-         ncaa_3p_only,NBA_3P_pct)
+         ncaa_3p_only,NBA_3P_pct) %>%
+  select(-School,-Conference)
 
 
-table <- prediction_data %>%
+player.table <- prediction_data %>%
   arrange(-NBA_3P_pct) %>%
   gt() %>% espnscrapeR::gt_theme_538() %>%
-  tab_header(title = md("**Testing NBA Three-Point Percentage Prediction Models**")) %>%
+  tab_header(title = md("**Comparing Predictions to NBA Performance**")) %>%
   data_color(columns = c(all_predictors,sq_composite,ncaa_3p_only,NBA_3P_pct),
              colors = brewer.pal(9,"RdYlGn")) %>%
-  cols_width(Name ~ px(250),
-             School ~ px(200)) %>%
+  cols_width(Name ~ px(250))%>%
   cols_label(NCAA_FT_pct = "NCAA FT%",
              NCAA_3P_pct = "NCAA 3P%",
              SQ_3P_catch_pct = "SQ Catch 3P%",
@@ -161,8 +173,7 @@ table <- prediction_data %>%
              all_predictors = "Prediction using all variables",
              sq_composite = "Prediction using SQ Data Only",
              ncaa_3p_only = "Prediction using NCAA 3P%",
-             NBA_3P_pct = "NBA 3P%",
-             Conference = "Conf.") %>%
+             NBA_3P_pct = "NBA 3P%") %>%
   fmt_percent(columns = c(NCAA_FT_pct,NCAA_3P_pct,SQ_3P_catch_pct,SQ_3P_dribble_pct,
                           all_predictors,sq_composite,ncaa_3p_only,NBA_3P_pct),
               decimals = 1) %>%
@@ -170,9 +181,58 @@ table <- prediction_data %>%
   tab_source_note("NCAA data source: BartTorvik") %>%
   tab_source_note("ShotQuality data source: ShotQuality.com")
 
+## outlier table ----
 
-table
+outlier.table <- prediction_data %>%
+  mutate(sq_miss = NBA_3P_pct - sq_composite,
+         ncaa_miss = NBA_3P_pct - ncaa_3p_only,
+         all_miss = NBA_3P_pct - all_predictors) %>%
+  mutate(total_miss = sq_miss + ncaa_miss + all_miss) %>%
+  mutate(avg_miss = round(total_miss/3,3)) %>%
+  arrange(-avg_miss) %>%
+  select(-NCAA_FT_pct,-NCAA_3P_pct,-SQ_3P_catch_pct,-SQ_3P_dribble_pct,
+         -sq_miss,-ncaa_miss,-all_miss,-total_miss)
 
-gtsave(table,"export-table.png")
-gtsave(table,"export-table.html")
+outlier.top.gt <- head(outlier.table,5) %>% gt() %>%
+  cols_label(all_predictors = "Prediction using all variables",
+             sq_composite = "Prediction using SQ Data Only",
+             ncaa_3p_only = "Prediction using NCAA 3P%",
+             NBA_3P_pct = "NBA 3P%",
+             avg_miss = "Average Model Error")  %>% 
+  espnscrapeR::gt_theme_538() %>%
+  tab_header(title = md("**Who Overperformed the Models?**")) %>%
+  fmt_percent(columns = c(all_predictors,sq_composite,ncaa_3p_only,NBA_3P_pct),
+              decimals = 1) %>%
+  data_color(columns = avg_miss,
+             colors = brewer.pal(5,"Greens")) %>% 
+  tab_style(style = cell_text(weight = "bold"),
+            locations = cells_body(columns = avg_miss))
+
+outlier.bottom.gt <- tail(outlier.table,5) %>% arrange(avg_miss) %>% gt() %>%
+  cols_label(all_predictors = "Prediction using all variables",
+             sq_composite = "Prediction using SQ Data Only",
+             ncaa_3p_only = "Prediction using NCAA 3P%",
+             NBA_3P_pct = "NBA 3P%",
+             avg_miss = "Average Model Error")  %>% 
+  espnscrapeR::gt_theme_538() %>%
+  tab_header(title = md("**Who Underperformed the Models?**")) %>%
+  fmt_percent(columns = c(all_predictors,sq_composite,ncaa_3p_only,NBA_3P_pct),
+              decimals = 1) %>%
+  data_color(columns = avg_miss,
+             colors = c("#9B111E","#D10000","#FF2400","#FF5C5C","#FF8A8A")) %>% 
+  tab_style(style = cell_text(weight = "bold"),
+            locations = cells_body(columns = avg_miss))
+
+## saving tables ----
+
+gtsave(player.table,"model-predictions.png")
+gtsave(player.table,"model-predictions.html")
+
 gtsave(r.export.table,"model-comparison.html")
+gtsave(r.export.table,"model-comparison.png")
+
+gtsave(outlier.top.gt,"outliers-best.png")
+gtsave(outlier.top.gt,"outliers-best.html")
+
+gtsave(outlier.bottom.gt,"outliers-worst.png")
+gtsave(outlier.bottom.gt,"outliers-worst.html")
